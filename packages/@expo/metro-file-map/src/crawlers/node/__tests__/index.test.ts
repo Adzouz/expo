@@ -312,6 +312,76 @@ describe('node crawler', () => {
     expect(removedFiles).toEqual(new Set());
   });
 
+  // A recrawl diffs against the live file system, whose consumers (e.g. a
+  // package.json cache) may hold contents read without a stat.
+  describe('in a recrawl', () => {
+    test('stats files with no prior mtime, and reports them as changed', async () => {
+      vol.fromJSON({
+        '/project/fruits/apple.js': 'a',
+        '/project/fruits/banana.js': 'b',
+      });
+      const appleStat = vol.statSync('/project/fruits/apple.js');
+      const bananaStat = vol.statSync('/project/fruits/banana.js');
+      const previousFiles: FileData = new Map([
+        ['fruits/apple.js', [null, 0, 0, null, 0, null] as FileMetadata],
+        ['fruits/banana.js', [null, 0, 0, null, 0, null] as FileMetadata],
+      ]);
+
+      const { changedFiles, removedFiles } = await crawl({
+        previousState: {
+          fileSystem: makeTreeFS(previousFiles),
+          clocks: new Map(),
+        },
+        subpath: 'fruits',
+      });
+
+      expect(changedFiles).toEqual(
+        new Map([
+          [
+            'fruits/apple.js',
+            [appleStat.mtime.getTime(), appleStat.size, 0, null, 0, null] as FileMetadata,
+          ],
+          [
+            'fruits/banana.js',
+            [bananaStat.mtime.getTime(), bananaStat.size, 0, null, 0, null] as FileMetadata,
+          ],
+        ])
+      );
+      expect(removedFiles).toEqual(new Set());
+    });
+
+    test('stats a symlink whose target was read without a stat', async () => {
+      vol.fromJSON({
+        '/project/fruits/apple.js': 'a',
+        '/project/fruits/banana.js': 'b',
+      });
+      // Retargeted since its target was read
+      vol.symlinkSync('/project/fruits/banana.js', '/project/fruits/link.js');
+      const linkStat = vol.lstatSync('/project/fruits/link.js');
+      const previousFiles: FileData = new Map([
+        ['fruits/link.js', [null, 0, 0, null, 'fruits/apple.js', null] as FileMetadata],
+      ]);
+
+      const { changedFiles } = await crawl({
+        includeSymlinks: true,
+        previousState: {
+          fileSystem: makeTreeFS(previousFiles),
+          clocks: new Map(),
+        },
+        subpath: 'fruits',
+      });
+
+      expect(changedFiles.get('fruits/link.js')).toEqual([
+        linkStat.mtime.getTime(),
+        linkStat.size,
+        0,
+        null,
+        1,
+        null,
+      ]);
+    });
+  });
+
   test('marks symlinks correctly when stat is skipped', async () => {
     vol.fromJSON({
       '/project/fruits/apple.js': 'a',

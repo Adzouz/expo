@@ -29,7 +29,9 @@ function find(
   includeSymlinks: boolean,
   rootDir: string,
   console: Console,
-  previousFileSystem: FileSystem | null,
+  // Files with no mtime here are listed without a stat. Null to stat every
+  // file.
+  lazyStatFileSystem: FileSystem | null,
   callback: Callback
 ): void {
   const result: FileData = new Map();
@@ -96,8 +98,8 @@ function find(
             continue;
           }
 
-          const mtime = previousFileSystem?.getMtimeByNormalPath(childNormal);
-          if (mtime == null || mtime === 0) {
+          const mtime = lazyStatFileSystem?.getMtimeByNormalPath(childNormal);
+          if (lazyStatFileSystem != null && (mtime == null || mtime === 0)) {
             // When we're in a cold start or a previous file doesn't exist, we can skip
             // the mtime/size lstat now and treat the file as new
             result.set(childNormal, [null, 0, 0, null, isSymbolicLink ? 1 : 0, null]);
@@ -184,7 +186,10 @@ export default async function nodeCrawl(options: CrawlerOptions): Promise<CrawlR
       includeSymlinks,
       rootDir,
       console,
-      previousState.fileSystem,
+      // A recrawl while watching diffs against the live file system, whose
+      // consumers (e.g. a package.json cache) may hold contents read without a
+      // stat, so it stats every file.
+      subpath == null ? previousState.fileSystem : null,
       callback
     );
   });
